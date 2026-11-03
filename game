@@ -1,3 +1,7 @@
+--!strict
+-- LocalScript → StarterPlayer > StarterPlayerScripts
+-- Путь: Workspace.Map.Trees
+
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local TweenService = game:GetService("TweenService")
@@ -27,16 +31,20 @@ local TELEPORT_OFFSET = Vector3.new(0, 5, 8)
 
 local DELAY_MIN = 0.2
 local DELAY_MAX = 5.0
-local DELAY_DEFAULT = 1.0
+local DELAY_DEFAULT = 1.5
 local DELAY_STEP = 0.1
 
 -- ============================================================
 -- СОСТОЯНИЕ
 -- ============================================================
 local savedCFrame: CFrame? = nil
+local savedClassName: string? = nil
 local isAway: boolean = false
 local teleportDelay: number = DELAY_DEFAULT
-local activeCycle: (() -> ())? = nil   -- функция остановки цикла
+local activeCountdown: (() -> ())? = nil
+
+-- ВАЖНО: Объявляем функцию заранее, чтобы нижние функции её видели
+local refreshList
 
 -- ============================================================
 -- УТИЛИТА
@@ -67,6 +75,7 @@ if not treesFolder then
 		if treesFolder then break end
 	end
 end
+
 if not treesFolder then
 	warn("[TreeTeleporter] Не удалось найти Workspace.Map.Trees.")
 	return
@@ -85,7 +94,7 @@ local function collectTreeClasses(): { [string]: { Model } }
 end
 
 -- ============================================================
--- GUI (сокращённо, как в полной версии)
+-- GUI
 -- ============================================================
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = GUI_NAME
@@ -95,11 +104,12 @@ screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.DisplayOrder = 100
 screenGui.Parent = playerGui
 
+-- Toggle
 local toggleBtn = Instance.new("TextButton")
 toggleBtn.Size = UDim2.fromOffset(56, 56)
 toggleBtn.Position = UDim2.new(0, 20, 0.5, -28)
 toggleBtn.BackgroundColor3 = Color3.fromRGB(30, 34, 45)
-toggleBtn.TextColor3 = Color3.new(1,1,1)
+toggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 toggleBtn.Font = Enum.Font.GothamBold
 toggleBtn.TextSize = 24
 toggleBtn.Text = "🌲"
@@ -116,6 +126,7 @@ tgr.Color = ColorSequence.new({
 })
 tgr.Rotation = 90; tgr.Parent = toggleBtn
 
+-- Панель
 local panel = Instance.new("Frame")
 panel.Size = UDim2.fromOffset(340, 530)
 panel.Position = UDim2.new(0, 90, 0.5, -265)
@@ -142,7 +153,7 @@ local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -70, 0, 52)
 titleLabel.Position = UDim2.fromOffset(18, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "🌲  Обход деревьев"
+titleLabel.Text = "🌲  Телепорт к деревьям"
 titleLabel.Font = Enum.Font.GothamBold
 titleLabel.TextSize = 17
 titleLabel.TextColor3 = Color3.fromRGB(235, 240, 255)
@@ -154,7 +165,7 @@ closeBtn.Size = UDim2.fromOffset(30, 30)
 closeBtn.Position = UDim2.new(1, -40, 0, 11)
 closeBtn.BackgroundColor3 = Color3.fromRGB(220, 70, 70)
 closeBtn.Text = "✕"
-closeBtn.TextColor3 = Color3.new(1,1,1)
+closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 closeBtn.Font = Enum.Font.GothamBold
 closeBtn.TextSize = 14
 closeBtn.AutoButtonColor = false
@@ -164,7 +175,7 @@ closeBtn.Parent = titleBar
 local ccc = Instance.new("UICorner"); ccc.CornerRadius = UDim.new(0, 8); ccc.Parent = closeBtn
 
 -- ============================================================
--- ЗАДЕРЖКА (пауза между деревьями)
+-- ЗАДЕРЖКА
 -- ============================================================
 local delayBox = Instance.new("Frame")
 delayBox.Size = UDim2.new(1, -28, 0, 64)
@@ -180,7 +191,7 @@ local delayTitle = Instance.new("TextLabel")
 delayTitle.Size = UDim2.new(1, -110, 0, 20)
 delayTitle.Position = UDim2.fromOffset(12, 8)
 delayTitle.BackgroundTransparency = 1
-delayTitle.Text = "⏱ Пауза между деревьями"
+delayTitle.Text = "⏱ Задержка телепорта"
 delayTitle.Font = Enum.Font.GothamBold
 delayTitle.TextSize = 12
 delayTitle.TextColor3 = Color3.fromRGB(180, 190, 215)
@@ -218,7 +229,7 @@ local sfc = Instance.new("UICorner"); sfc.CornerRadius = UDim.new(1, 0); sfc.Par
 local sliderKnob = Instance.new("Frame")
 sliderKnob.Size = UDim2.fromOffset(16, 16)
 sliderKnob.Position = UDim2.new(0, 0, 0.5, -8)
-sliderKnob.BackgroundColor3 = Color3.new(1,1,1)
+sliderKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 sliderKnob.BorderSizePixel = 0
 sliderKnob.ZIndex = 2
 sliderKnob.Parent = sliderBg
@@ -269,7 +280,7 @@ searchBox.Size = UDim2.new(1, -28, 0, 36)
 searchBox.Position = UDim2.fromOffset(14, 132)
 searchBox.BackgroundColor3 = Color3.fromRGB(15, 18, 24)
 searchBox.TextColor3 = Color3.fromRGB(220, 225, 240)
-searchBox.PlaceholderText = "🔍 Поиск класса..."
+searchBox.PlaceholderText = "🔍 Поиск класса дерева..."
 searchBox.PlaceholderColor3 = Color3.fromRGB(120, 130, 150)
 searchBox.Font = Enum.Font.Gotham
 searchBox.TextSize = 14
@@ -290,7 +301,7 @@ scrollFrame.BackgroundTransparency = 1
 scrollFrame.BorderSizePixel = 0
 scrollFrame.ScrollBarThickness = 4
 scrollFrame.ScrollBarImageColor3 = Color3.fromRGB(90, 100, 130)
-scrollFrame.CanvasSize = UDim2.new()
+scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
 scrollFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
 scrollFrame.Parent = panel
 
@@ -313,7 +324,7 @@ statusLabel.BackgroundColor3 = Color3.fromRGB(15, 18, 24)
 statusLabel.TextColor3 = Color3.fromRGB(150, 160, 180)
 statusLabel.Font = Enum.Font.Gotham
 statusLabel.TextSize = 12
-statusLabel.Text = "Готов"
+statusLabel.Text = "Готов к работе"
 statusLabel.BorderSizePixel = 0
 statusLabel.TextXAlignment = Enum.TextXAlignment.Left
 statusLabel.Parent = footer
@@ -358,17 +369,17 @@ local function getHRP(): BasePart?
 	return char and char:FindFirstChild("HumanoidRootPart") :: BasePart?
 end
 
-local function cancelCycle()
-	if activeCycle then
-		local c = activeCycle
-		activeCycle = nil
-		c()
+local function cancelCountdown()
+	if activeCountdown then
+		local cancel = activeCountdown
+		activeCountdown = nil
+		cancel()
 	end
 end
 
 local function returnToSavedPoint()
 	if not savedCFrame then
-		setStatus("⚠ Нет точки возврата", Color3.fromRGB(255, 200, 100))
+		setStatus("⚠ Нет сохранённой точки", Color3.fromRGB(255, 200, 100))
 		return
 	end
 	local hrp = getHRP()
@@ -378,115 +389,100 @@ local function returnToSavedPoint()
 	end
 	hrp.CFrame = savedCFrame
 	savedCFrame = nil
+	savedClassName = nil
 	isAway = false
 	setStatus("↩ Возврат выполнен", Color3.fromRGB(120, 220, 140))
-	refreshList()
+	if refreshList then refreshList() end
 end
 
--- Запуск цикла обхода
-local function startCycle(className: string, onButtonUpdate: ((string) -> ())?)
-	local models = classes[className]
-	if not models or #models == 0 then
+local function startTeleportWithDelay(className: string, onButtonUpdate: ((string) -> ())?)
+	local list = classes[className]
+	if not list or #list == 0 then
 		setStatus("❌ Класс не найден", Color3.fromRGB(255, 100, 100))
-		return
+		return nil
 	end
 
 	local hrp = getHRP()
 	if not hrp then
 		setStatus("❌ Персонаж не найден", Color3.fromRGB(255, 100, 100))
-		return
+		return nil
 	end
 
-	-- собираем TrunkBase со всех деревьев класса
-	local list: { BasePart } = {}
-	for _, m in ipairs(models) do
-		local b = m:FindFirstChild(TRUNK_BASE_NAME, true)
-		if b and b:IsA("BasePart") then
-			table.insert(list, b)
+	if isAway and savedClassName == className and savedCFrame then
+		returnToSavedPoint()
+		return nil
+	end
+
+	local valid: { BasePart } = {}
+	for _, model in ipairs(list) do
+		local base = model:FindFirstChild(TRUNK_BASE_NAME, true)
+		if base and base:IsA("BasePart") then
+			table.insert(valid, base)
 		end
 	end
-	if #list == 0 then
-		setStatus("❌ Нет TrunkBase", Color3.fromRGB(255, 100, 100))
-		return
+	if #valid == 0 then
+		setStatus("❌ Нет TrunkBase в деревьях", Color3.fromRGB(255, 100, 100))
+		return nil
 	end
 
-	-- сохраняем точку возврата (один раз)
 	if not isAway then
 		savedCFrame = hrp.CFrame
 	end
 
 	local cancelled = false
-	local function stopCycle()
+	local remaining = teleportDelay
+
+	local function cancel()
 		cancelled = true
-		if onButtonUpdate then onButtonUpdate("⏹ Стоп") end
+		if onButtonUpdate then onButtonUpdate("TP") end
+		setStatus("⏹ Телепорт отменён", Color3.fromRGB(255, 200, 100))
 	end
 
-	onButtonUpdate and onButtonUpdate("⏹ Стоп")
-
 	task.spawn(function()
-		local total = #list
-		for i, base in ipairs(list) do
-			if cancelled then break end
-
-			local hrpNow = getHRP()
-			if not hrpNow then break end
-
-			-- телепорт к дереву i
-			local pos = base.Position + TELEPORT_OFFSET
-			local oldCF = hrpNow.CFrame
-			hrpNow.CFrame = CFrame.new(pos, base.Position) * (oldCF - oldCF.Position)
-
-			if onButtonUpdate then
-				onButtonUpdate(("%d/%d"):format(i, total))
-			end
-			setStatus(("🌳 %d/%d → '%s'"):format(i, total, className), Color3.fromRGB(150, 200, 255))
-
-			-- пауза между деревьями (кроме последнего)
-			if i < total then
-				local remaining = teleportDelay
-				while remaining > 0 and not cancelled do
-					local dt = RunService.Heartbeat:Wait()
-					remaining -= dt
-				end
+		local lastWhole = math.ceil(remaining)
+		while remaining > 0 do
+			if cancelled then return end
+			local dt = RunService.Heartbeat:Wait()
+			remaining -= dt
+			local whole = math.max(0, math.ceil(remaining))
+			if whole ~= lastWhole and onButtonUpdate then
+				onButtonUpdate(whole > 0 and tostring(whole) or "…")
+				lastWhole = whole
 			end
 		end
+		if cancelled then return end
 
-		if cancelled then
-			-- прервали: возвращаемся
-			local hrpNow = getHRP()
-			if hrpNow and savedCFrame then
-				hrpNow.CFrame = savedCFrame
-			end
-			savedCFrame = nil
-			isAway = false
-			setStatus("⏹ Обход остановлен, возврат", Color3.fromRGB(255, 200, 100))
-		else
-			-- завершили: автоматически возвращаемся
-			local hrpNow = getHRP()
-			if hrpNow and savedCFrame then
-				hrpNow.CFrame = savedCFrame
-			end
-			savedCFrame = nil
-			isAway = false
-			setStatus(("✅ Обход %d деревьев завершён"):format(#list), Color3.fromRGB(120, 220, 140))
+		local hrpNow = getHRP()
+		if not hrpNow then
+			setStatus("❌ Персонаж потерян", Color3.fromRGB(255, 100, 100))
+			if onButtonUpdate then onButtonUpdate("TP") end
+			return
 		end
 
-		if onButtonUpdate then onButtonUpdate("TP") end
-		activeCycle = nil
-		refreshList()
+		local target = valid[math.random(1, #valid)]
+		local targetPos = target.Position + TELEPORT_OFFSET
+		local oldCF = hrpNow.CFrame
+		hrpNow.CFrame = CFrame.new(targetPos, target.Position) * (oldCF - oldCF.Position)
+
+		isAway = true
+		savedClassName = className
+		setStatus(("✅ У '%s' (%d). Нажми ещё — вернёт"):format(className, #valid), Color3.fromRGB(120, 220, 140))
+		if onButtonUpdate then onButtonUpdate("↩ Назад") end
+		if refreshList then refreshList() end
 	end)
 
-	isAway = true
-	activeCycle = stopCycle
-	return stopCycle
+	activeCountdown = function()
+		cancelled = true
+	end
+	return cancel
 end
 
 local function createListItem(name: string, index: number, count: number)
-	local isRunning = activeCycle ~= nil
+	local atThisClass = isAway and savedClassName == name
 
 	local btn = Instance.new("TextButton")
 	btn.Size = UDim2.new(1, 0, 0, 48)
-	btn.BackgroundColor3 = Color3.fromRGB(30, 34, 45)
+	btn.BackgroundColor3 = atThisClass and Color3.fromRGB(50, 80, 60) or Color3.fromRGB(30, 34, 45)
 	btn.AutoButtonColor = false
 	btn.BorderSizePixel = 0
 	btn.Text = ""
@@ -494,7 +490,11 @@ local function createListItem(name: string, index: number, count: number)
 	btn.Parent = scrollFrame
 
 	local corner = Instance.new("UICorner"); corner.CornerRadius = UDim.new(0, 10); corner.Parent = btn
-	local stroke = Instance.new("UIStroke"); stroke.Color = Color3.fromRGB(70, 80, 110); stroke.Thickness = 1; stroke.Transparency = 0.6; stroke.Parent = btn
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = atThisClass and Color3.fromRGB(120, 220, 140) or Color3.fromRGB(70, 80, 110)
+	stroke.Thickness = 1
+	stroke.Transparency = atThisClass and 0.3 or 0.6
+	stroke.Parent = btn
 
 	local icon = Instance.new("TextLabel")
 	icon.Size = UDim2.fromOffset(32, 32)
@@ -506,6 +506,7 @@ local function createListItem(name: string, index: number, count: number)
 	icon.TextColor3 = Color3.fromRGB(150, 230, 160)
 	icon.BorderSizePixel = 0
 	icon.Parent = btn
+
 	local icc = Instance.new("UICorner"); icc.CornerRadius = UDim.new(0, 8); icc.Parent = icon
 
 	local nameLabel = Instance.new("TextLabel")
@@ -534,14 +535,15 @@ local function createListItem(name: string, index: number, count: number)
 	local tpBtn = Instance.new("TextButton")
 	tpBtn.Size = UDim2.fromOffset(64, 30)
 	tpBtn.Position = UDim2.new(1, -74, 0.5, -15)
-	tpBtn.BackgroundColor3 = Color3.fromRGB(60, 130, 240)
-	tpBtn.Text = "TP"
-	tpBtn.TextColor3 = Color3.new(1,1,1)
+	tpBtn.BackgroundColor3 = atThisClass and Color3.fromRGB(220, 130, 60) or Color3.fromRGB(60, 130, 240)
+	tpBtn.Text = atThisClass and "↩ Назад" or "TP"
+	tpBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 	tpBtn.Font = Enum.Font.GothamBold
 	tpBtn.TextSize = 12
 	tpBtn.AutoButtonColor = false
 	tpBtn.BorderSizePixel = 0
 	tpBtn.Parent = btn
+
 	local tcc2 = Instance.new("UICorner"); tcc2.CornerRadius = UDim.new(0, 8); tcc2.Parent = tpBtn
 
 	local function setBtnText(s: string)
@@ -549,11 +551,16 @@ local function createListItem(name: string, index: number, count: number)
 	end
 
 	local function doTP()
-		if activeCycle then
-			cancelCycle()
+		if activeCountdown then
+			cancelCountdown()
+			setBtnText("TP")
 			return
 		end
-		startCycle(name, setBtnText)
+		if isAway and savedClassName == name then
+			returnToSavedPoint()
+			return
+		end
+		startTeleportWithDelay(name, setBtnText)
 	end
 
 	btn.MouseButton1Click:Connect(doTP)
@@ -567,7 +574,9 @@ local function createListItem(name: string, index: number, count: number)
 	end)
 end
 
-function refreshList()
+-- Назначаем функцию refreshList (без local, чтобы она перезаписала верхнюю переменную)
+refreshList = function()
+	cancelCountdown()
 	for _, child in ipairs(scrollFrame:GetChildren()) do
 		if child:IsA("TextButton") then child:Destroy() end
 	end
@@ -609,10 +618,11 @@ toggleBtn.MouseButton1Click:Connect(function() setOpen(not isOpen) end)
 closeBtn.MouseButton1Click:Connect(function() setOpen(false) end)
 
 resetBtn.MouseButton1Click:Connect(function()
-	cancelCycle()
 	savedCFrame = nil
+	savedClassName = nil
 	isAway = false
-	setStatus("🗑 Сброшено", Color3.fromRGB(255, 200, 100))
+	cancelCountdown()
+	setStatus("🗑 Точка возврата сброшена", Color3.fromRGB(255, 200, 100))
 	refreshList()
 end)
 
@@ -653,5 +663,4 @@ end
 
 -- ============================================================
 -- СТАРТ
--- ============================================================
 refreshList()
