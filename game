@@ -33,7 +33,7 @@ destroyOldGUI()
 
 -- === CONFIG ===
 local OFFSET_DISTANCE = 6 -- расстояние от TrunkBase
-local HEIGHT_OFFSET = 3  -- на сколько поднять над землёй
+local HEIGHT_OFFSET = 3   -- на сколько поднять над землёй
 
 -- === Получаем папку Trees ===
 local function getTreesFolder()
@@ -84,23 +84,39 @@ end
 -- === Точка телепорта: сбоку от TrunkBase, лицом к стволу ===
 local function getTeleportCFrame(trunkBase)
     local center = trunkBase.Position
-
-    -- Случайный угол по кругу вокруг ствола
     local angle = math.random() * math.pi * 2
     local dir = Vector3.new(math.cos(angle), 0, math.sin(angle))
-
-    -- Точка на расстоянии OFFSET_DISTANCE от центра ствола
     local point = center + dir * OFFSET_DISTANCE + Vector3.new(0, HEIGHT_OFFSET, 0)
-
-    -- Смотрим В СТОРОНУ ствола (лицом к дереву)
     local lookTarget = Vector3.new(center.X, point.Y, center.Z)
-
-    -- Если точки совпали — фоллбэк
-    if (lookTarget - point).Magnitude < 0.1 then
-        lookTarget = point + Vector3.new(0, 0, -1)
-    end
-
     return CFrame.lookAt(point, lookTarget)
+end
+
+-- === Принудительный поворот камеры (для первого лица) ===
+local function faceDirection(look)
+    local camera = Workspace.CurrentCamera
+    local char = player.Character
+    if not camera or not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local flatLook = Vector3.new(look.X, 0, look.Z)
+    if flatLook.Magnitude < 0.01 then return end
+    flatLook = flatLook.Unit
+
+    local pos = hrp.Position
+    hrp.CFrame = CFrame.lookAt(pos, pos + flatLook)
+
+    local conn
+    local frames = 0
+    conn = RunService.RenderStepped:Connect(function()
+        frames = frames + 1
+        if frames > 15 or not hrp.Parent then
+            conn:Disconnect()
+            return
+        end
+        local camPos = camera.CFrame.Position
+        camera.CFrame = CFrame.lookAt(camPos, camPos + flatLook)
+    end)
 end
 
 -- === UI ===
@@ -208,6 +224,7 @@ local dragStart = nil
 local startPos = nil
 
 local function isIgnored(obj)
+    if not obj then return true end
     local cur = obj
     while cur and cur ~= main do
         if cur == closeBtn or cur:IsA("TextButton") or cur:IsA("ImageButton")
@@ -226,18 +243,20 @@ local function startDrag(input)
 end
 
 title.InputBegan:Connect(function(input)
-    if isIgnored(input.Target) then return end
     if input.UserInputType == Enum.UserInputType.MouseButton1
         or input.UserInputType == Enum.UserInputType.Touch then
-        startDrag(input)
+        if not isIgnored(input.Target) then
+            startDrag(input)
+        end
     end
 end)
 
 main.InputBegan:Connect(function(input)
-    if isIgnored(input.Target) then return end
     if input.UserInputType == Enum.UserInputType.MouseButton1
         or input.UserInputType == Enum.UserInputType.Touch then
-        startDrag(input)
+        if not isIgnored(input.Target) then
+            startDrag(input)
+        end
     end
 end)
 
@@ -309,6 +328,18 @@ dlLayout.Parent = dlScroll
 local selectedClass = nil
 local selectedIndex = 0
 
+-- СТАТУС (создаём ДО дропдауна, чтобы не было ошибки Line 333)
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(1, -8, 0, 30)
+statusLabel.BackgroundColor3 = Color3.fromRGB(25, 28, 38)
+statusLabel.Text = "Класс не выбран"
+statusLabel.Font = Enum.Font.GothamMedium
+statusLabel.TextSize = 12
+statusLabel.TextColor3 = Color3.fromRGB(160, 175, 210)
+statusLabel.BorderSizePixel = 0
+statusLabel.Parent = scroll
+Instance.new("UICorner", statusLabel).CornerRadius = UDim.new(0, 6)
+
 local function rebuildDropdown()
     for _, c in ipairs(dlScroll:GetChildren()) do
         if c:IsA("TextButton") then c:Destroy() end
@@ -347,18 +378,6 @@ rebuildDropdown()
 dropdownBtn.MouseButton1Click:Connect(function()
     dropdownList.Visible = not dropdownList.Visible
 end)
-
--- Статус
-local statusLabel = Instance.new("TextLabel")
-statusLabel.Size = UDim2.new(1, -8, 0, 30)
-statusLabel.BackgroundColor3 = Color3.fromRGB(25, 28, 38)
-statusLabel.Text = "Класс не выбран"
-statusLabel.Font = Enum.Font.GothamMedium
-statusLabel.TextSize = 12
-statusLabel.TextColor3 = Color3.fromRGB(160, 175, 210)
-statusLabel.BorderSizePixel = 0
-statusLabel.Parent = scroll
-Instance.new("UICorner", statusLabel).CornerRadius = UDim.new(0, 6)
 
 -- === Ползунок задержки ===
 makeLabel("Задержка телепорта (сек):", Color3.fromRGB(120, 180, 255))
@@ -484,7 +503,7 @@ local btnNext = makeButton("Вперёд ▶", Color3.fromRGB(60, 80, 140))
 local btnTP = makeButton("Телепорт", Color3.fromRGB(70, 130, 255))
 local btnLoop = makeButton("▶ Цикл", Color3.fromRGB(60, 160, 90))
 
--- === Телепорт ===
+-- === Логика телепорта ===
 local function teleportToModel(model)
     if not model or not model.Parent then return false, "модель удалена" end
     local trunk = getTrunkBase(model)
@@ -492,11 +511,27 @@ local function teleportToModel(model)
     local char = player.Character
     if not char then return false, "нет персонажа" end
     local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return false, "нет HumanoidRootPart" end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum then return false, "нет HRP/Humanoid" end
 
     local cf = getTeleportCFrame(trunk)
+
+    -- Сбрасываем физику
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.AssemblyAngularVelocity = Vector3.zero
+
+    hum.AutoRotate = false
     hrp.CFrame = cf
-    -- На всякий случай фиксируем и голову/камеру смотрящей вперёд
+
+    -- Поворачиваем камеру лицом к стволу
+    faceDirection(cf.LookVector)
+
+    task.delay(0.2, function()
+        if hum and hum.Parent then
+            hum.AutoRotate = true
+        end
+    end)
+
     return true, nil
 end
 
