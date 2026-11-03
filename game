@@ -1,11 +1,10 @@
--- LocalScript: Modern Tree Teleporter GUI
+-- LocalScript: Modern Tree Teleporter GUI (только живые деревья)
 -- Place in StarterPlayerScripts
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
-local TweenService = game:GetService("TweenService")
-local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -15,10 +14,7 @@ local function destroyOldGUI()
     local names = {"TreeTeleporterGUI", "TreeTP", "TreeTeleporter", "TreeGui"}
     for _, name in ipairs(names) do
         local old = playerGui:FindFirstChild(name)
-        if old then
-            old:Destroy()
-            print("[TreeTP] Удалён старый GUI:", name)
-        end
+        if old then old:Destroy() end
     end
     for _, child in ipairs(playerGui:GetChildren()) do
         if child:IsA("ScreenGui") then
@@ -32,23 +28,37 @@ end
 destroyOldGUI()
 
 -- === CONFIG ===
-local OFFSET_DISTANCE = 6 -- расстояние от TrunkBase
-local HEIGHT_OFFSET = 3   -- на сколько поднять над землёй
+local OFFSET_DISTANCE = 6 
+local HEIGHT_OFFSET = 3   
 
--- === Получаем папку Trees ===
-local function getTreesFolder()
-    local map = Workspace:FindFirstChild("Map")
-    if not map then return nil end
-    return map:FindFirstChild("Trees")
-end
-
-local treesFolder = getTreesFolder()
+-- === Папка Trees ===
+local map = Workspace:FindFirstChild("Map")
+local treesFolder = map and map:FindFirstChild("Trees")
 if not treesFolder then
     warn("[TreeTP] Папка Map/Trees не найдена!")
     return
 end
 
--- === Собираем классы деревьев ===
+-- === Проверки дерева ===
+local function hasTrunk(model)
+    for _, v in ipairs(model:GetDescendants()) do
+        if v:IsA("BasePart") and v.Name:lower() == "trunkbase" then return v end
+    end
+    return nil
+end
+
+local function isAlive(model)
+    -- Дерево "живое", если у него есть модель/часть с именем Top
+    for _, v in ipairs(model:GetChildren()) do
+        if v.Name == "Top" then return true end
+    end
+    for _, v in ipairs(model:GetDescendants()) do
+        if v.Name == "Top" then return true end
+    end
+    return false
+end
+
+-- === Сбор классов ===
 local treeClasses = {}
 local classNames = {}
 
@@ -71,17 +81,7 @@ local function scanTrees()
 end
 scanTrees()
 
--- === Поиск TrunkBase ===
-local function getTrunkBase(model)
-    for _, child in ipairs(model:GetDescendants()) do
-        if child:IsA("BasePart") and child.Name:lower() == "trunkbase" then
-            return child
-        end
-    end
-    return nil
-end
-
--- === Точка телепорта: сбоку от TrunkBase, лицом к стволу ===
+-- === Точка телепорта (лицом к стволу) ===
 local function getTeleportCFrame(trunkBase)
     local center = trunkBase.Position
     local angle = math.random() * math.pi * 2
@@ -91,21 +91,18 @@ local function getTeleportCFrame(trunkBase)
     return CFrame.lookAt(point, lookTarget)
 end
 
--- === Принудительный поворот камеры (для первого лица) ===
 local function faceDirection(look)
     local camera = Workspace.CurrentCamera
     local char = player.Character
     if not camera or not char then return end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
-
     local flatLook = Vector3.new(look.X, 0, look.Z)
     if flatLook.Magnitude < 0.01 then return end
     flatLook = flatLook.Unit
-
-    local pos = hrp.Position
-    hrp.CFrame = CFrame.lookAt(pos, pos + flatLook)
-
+    
+    hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + flatLook)
+    
     local conn
     local frames = 0
     conn = RunService.RenderStepped:Connect(function()
@@ -128,7 +125,7 @@ screenGui.Parent = playerGui
 
 local main = Instance.new("Frame")
 main.Name = "Main"
-main.Size = UDim2.new(0, 340, 0, 520)
+main.Size = UDim2.new(0, 340, 0, 540)
 main.Position = UDim2.new(0, 20, 0, 20)
 main.BackgroundColor3 = Color3.fromRGB(20, 22, 30)
 main.BackgroundTransparency = 0.05
@@ -143,7 +140,6 @@ stroke.Thickness = 1.5
 stroke.Transparency = 0.4
 stroke.Parent = main
 
--- Заголовок
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, 0, 0, 44)
 title.BackgroundColor3 = Color3.fromRGB(30, 34, 48)
@@ -156,7 +152,6 @@ title.TextXAlignment = Enum.TextXAlignment.Left
 title.Parent = main
 Instance.new("UICorner", title).CornerRadius = UDim.new(0, 12)
 
--- Кнопка закрытия
 local closeBtn = Instance.new("TextButton")
 closeBtn.Size = UDim2.new(0, 32, 0, 32)
 closeBtn.Position = UDim2.new(1, -40, 0, 6)
@@ -169,7 +164,6 @@ closeBtn.BorderSizePixel = 0
 closeBtn.Parent = title
 Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 8)
 
--- Скролл
 local scroll = Instance.new("ScrollingFrame")
 scroll.Size = UDim2.new(1, -20, 1, -60)
 scroll.Position = UDim2.new(0, 10, 0, 54)
@@ -199,7 +193,6 @@ local function makeLabel(text, color)
     return l
 end
 
--- Кнопка возврата
 local toggleBtn = Instance.new("TextButton")
 toggleBtn.Name = "Toggle"
 toggleBtn.Size = UDim2.new(0, 60, 0, 60)
@@ -213,12 +206,7 @@ toggleBtn.BorderSizePixel = 0
 toggleBtn.Visible = false
 toggleBtn.Parent = screenGui
 Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0, 12)
-local tstroke = Instance.new("UIStroke")
-tstroke.Color = Color3.fromRGB(70, 130, 255)
-tstroke.Thickness = 1.5
-tstroke.Parent = toggleBtn
 
--- === DRAG (мышь + тач) ===
 local dragging = false
 local dragStart = nil
 local startPos = nil
@@ -227,8 +215,7 @@ local function isIgnored(obj)
     if not obj then return true end
     local cur = obj
     while cur and cur ~= main do
-        if cur == closeBtn or cur:IsA("TextButton") or cur:IsA("ImageButton")
-            or cur:IsA("ScrollingFrame") then
+        if cur == closeBtn or cur:IsA("TextButton") or cur:IsA("ImageButton") or cur:IsA("ScrollingFrame") then
             return true
         end
         cur = cur.Parent
@@ -243,44 +230,29 @@ local function startDrag(input)
 end
 
 title.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
-        if not isIgnored(input.Target) then
-            startDrag(input)
-        end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        if not isIgnored(input.Target) then startDrag(input) end
     end
 end)
 
 main.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
-        if not isIgnored(input.Target) then
-            startDrag(input)
-        end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        if not isIgnored(input.Target) then startDrag(input) end
     end
 end)
 
 UserInputService.InputChanged:Connect(function(input)
     if not dragging then return end
-    if input.UserInputType == Enum.UserInputType.MouseMovement
-        or input.UserInputType == Enum.UserInputType.Touch then
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
         local delta = input.Position - dragStart
-        main.Position = UDim2.new(
-            startPos.X.Scale, startPos.X.Offset + delta.X,
-            startPos.Y.Scale, startPos.Y.Offset + delta.Y
-        )
+        main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
     end
 end)
 
 UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         dragging = false
     end
-end)
-
-UserInputService.WindowFocusReleased:Connect(function()
-    dragging = false
 end)
 
 -- === Выбор класса ===
@@ -305,11 +277,6 @@ dropdownList.BorderSizePixel = 0
 dropdownList.Visible = false
 dropdownList.Parent = scroll
 Instance.new("UICorner", dropdownList).CornerRadius = UDim.new(0, 8)
-local dlStroke = Instance.new("UIStroke")
-dlStroke.Color = Color3.fromRGB(70, 130, 255)
-dlStroke.Thickness = 1
-dlStroke.Transparency = 0.5
-dlStroke.Parent = dropdownList
 
 local dlScroll = Instance.new("ScrollingFrame")
 dlScroll.Size = UDim2.new(1, -8, 1, -8)
@@ -328,7 +295,6 @@ dlLayout.Parent = dlScroll
 local selectedClass = nil
 local selectedIndex = 0
 
--- СТАТУС (создаём ДО дропдауна, чтобы не было ошибки Line 333)
 local statusLabel = Instance.new("TextLabel")
 statusLabel.Size = UDim2.new(1, -8, 0, 30)
 statusLabel.BackgroundColor3 = Color3.fromRGB(25, 28, 38)
@@ -340,16 +306,29 @@ statusLabel.BorderSizePixel = 0
 statusLabel.Parent = scroll
 Instance.new("UICorner", statusLabel).CornerRadius = UDim.new(0, 6)
 
+-- === Счётчики (только живые) и обновление дропдауна ===
+local function getAliveCount(name)
+    local list = treeClasses[name]
+    if not list then return 0 end
+    local alive = 0
+    for _, model in ipairs(list) do
+        if isAlive(model) then alive = alive + 1 end
+    end
+    return alive
+end
+
 local function rebuildDropdown()
     for _, c in ipairs(dlScroll:GetChildren()) do
         if c:IsA("TextButton") then c:Destroy() end
     end
     for _, name in ipairs(classNames) do
         if treeClasses[name] and #treeClasses[name] > 0 then
+            local alive = getAliveCount(name)
             local item = Instance.new("TextButton")
             item.Size = UDim2.new(1, -4, 0, 26)
             item.BackgroundColor3 = Color3.fromRGB(35, 40, 55)
-            item.Text = "  " .. name .. "  (" .. #treeClasses[name] .. ")"
+            -- Показываем ТОЛЬКО количество живых
+            item.Text = "  " .. name .. "  [" .. alive .. "]"
             item.Font = Enum.Font.Gotham
             item.TextSize = 12
             item.TextColor3 = Color3.fromRGB(190, 205, 235)
@@ -357,19 +336,16 @@ local function rebuildDropdown()
             item.BorderSizePixel = 0
             item.Parent = dlScroll
             Instance.new("UICorner", item).CornerRadius = UDim.new(0, 6)
+            
             item.MouseButton1Click:Connect(function()
                 selectedClass = name
                 selectedIndex = 0
-                dropdownBtn.Text = "  " .. name .. "  (" .. #treeClasses[name] .. ")"
+                dropdownBtn.Text = "  " .. name .. "  [" .. alive .. "]"
                 dropdownList.Visible = false
-                statusLabel.Text = "Выбрано: " .. name .. " | " .. #treeClasses[name] .. " шт."
+                statusLabel.Text = string.format("Выбрано: %s (живых: %d)", name, alive)
             end)
-            item.MouseEnter:Connect(function()
-                item.BackgroundColor3 = Color3.fromRGB(50, 60, 90)
-            end)
-            item.MouseLeave:Connect(function()
-                item.BackgroundColor3 = Color3.fromRGB(35, 40, 55)
-            end)
+            item.MouseEnter:Connect(function() item.BackgroundColor3 = Color3.fromRGB(50, 60, 90) end)
+            item.MouseLeave:Connect(function() item.BackgroundColor3 = Color3.fromRGB(35, 40, 55) end)
         end
     end
 end
@@ -444,28 +420,22 @@ local function handleSliderInput(input)
 end
 
 sliderBg.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
-        sliding = true
-        handleSliderInput(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        sliding = true; handleSliderInput(input)
     end
 end)
 sliderKnob.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
-        sliding = true
-        handleSliderInput(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        sliding = true; handleSliderInput(input)
     end
 end)
 UserInputService.InputChanged:Connect(function(input)
-    if sliding and (input.UserInputType == Enum.UserInputType.MouseMovement
-        or input.UserInputType == Enum.UserInputType.Touch) then
+    if sliding and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
         handleSliderInput(input)
     end
 end)
 UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         sliding = false
     end
 end)
@@ -503,144 +473,116 @@ local btnNext = makeButton("Вперёд ▶", Color3.fromRGB(60, 80, 140))
 local btnTP = makeButton("Телепорт", Color3.fromRGB(70, 130, 255))
 local btnLoop = makeButton("▶ Цикл", Color3.fromRGB(60, 160, 90))
 
--- === Логика телепорта ===
+-- === Логика телепорта с проверкой Top ===
 local function teleportToModel(model)
-    if not model or not model.Parent then return false, "модель удалена" end
-    local trunk = getTrunkBase(model)
+    if not model or not model.Parent then return false, "нет модели" end
+    if not isAlive(model) then return false, "срублено (нет Top)" end
+    local trunk = hasTrunk(model)
     if not trunk then return false, "нет TrunkBase" end
+    
     local char = player.Character
-    if not char then return false, "нет персонажа" end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hrp or not hum then return false, "нет HRP/Humanoid" end
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum then return false, "нет персонажа" end
 
     local cf = getTeleportCFrame(trunk)
-
-    -- Сбрасываем физику
     hrp.AssemblyLinearVelocity = Vector3.zero
     hrp.AssemblyAngularVelocity = Vector3.zero
-
     hum.AutoRotate = false
     hrp.CFrame = cf
-
-    -- Поворачиваем камеру лицом к стволу
     faceDirection(cf.LookVector)
-
-    task.delay(0.2, function()
-        if hum and hum.Parent then
-            hum.AutoRotate = true
-        end
-    end)
-
+    task.delay(0.2, function() if hum and hum.Parent then hum.AutoRotate = true end end)
     return true, nil
 end
 
-local function getCurrentList()
-    if not selectedClass or not treeClasses[selectedClass] then return nil end
-    return treeClasses[selectedClass]
+-- Поиск следующего живого дерева
+local function findNextAlive(direction)
+    local list = selectedClass and treeClasses[selectedClass]
+    if not list or #list == 0 then return nil end
+    local startIdx = selectedIndex
+    local idx = selectedIndex
+    for _ = 1, #list do
+        idx = idx + direction
+        if idx > #list then idx = 1 elseif idx < 1 then idx = #list end
+        if isAlive(list[idx]) then
+            selectedIndex = idx
+            return list[idx], idx
+        end
+    end
+    selectedIndex = startIdx
+    return nil
 end
 
-local function ensureValidIndex()
-    local list = getCurrentList()
-    if not list or #list == 0 then return false end
-    if selectedIndex < 1 then selectedIndex = 1 end
-    if selectedIndex > #list then selectedIndex = #list end
-    return true
-end
+local function doTeleportNext(direction, isLoop)
+    local list = selectedClass and treeClasses[selectedClass]
+    if not list or #list == 0 then return false, "Выберите класс!" end
+    
+    local targetModel, newIdx = findNextAlive(direction)
+    if not targetModel then return false, "Все деревья срублены!" end
 
-local function doTeleport()
-    if not ensureValidIndex() then return false, "нет списка" end
-    local list = treeClasses[selectedClass]
-    return teleportToModel(list[selectedIndex])
+    local ok, err = teleportToModel(targetModel)
+    if ok then
+        local alive = getAliveCount(selectedClass)
+        local prefix = isLoop and "[LOOP] " or ""
+        statusLabel.Text = string.format("%s%s: %d/%d (Живых: %d)", prefix, selectedClass, selectedIndex, #list, alive)
+        return true
+    else
+        return false, err
+    end
 end
 
 btnTP.MouseButton1Click:Connect(function()
-    if not selectedClass then
-        statusLabel.Text = "Сначала выберите класс!"
-        return
-    end
-    local ok, err = doTeleport()
-    if ok then
-        statusLabel.Text = string.format("[%s] %d/%d", selectedClass, selectedIndex, #treeClasses[selectedClass])
+    if not selectedClass then statusLabel.Text = "Сначала выберите класс!"; return end
+    local list = treeClasses[selectedClass]
+    if selectedIndex >= 1 and selectedIndex <= #list and isAlive(list[selectedIndex]) then
+        local ok, err = teleportToModel(list[selectedIndex])
+        if ok then 
+            local alive = getAliveCount(selectedClass)
+            statusLabel.Text = string.format("%s: %d/%d (Живых: %d)", selectedClass, selectedIndex, #list, alive)
+        else statusLabel.Text = "Ошибка: " .. (err or "?") end
     else
-        statusLabel.Text = "Ошибка: " .. (err or "?")
-    end
-end)
-
-btnPrev.MouseButton1Click:Connect(function()
-    local list = getCurrentList()
-    if not list or #list == 0 then
-        statusLabel.Text = "Выберите класс!"
-        return
-    end
-    selectedIndex = selectedIndex - 1
-    if selectedIndex < 1 then selectedIndex = #list end
-    local ok, err = doTeleport()
-    if ok then
-        statusLabel.Text = string.format("[%s] %d/%d", selectedClass, selectedIndex, #list)
-    else
-        statusLabel.Text = "Ошибка: " .. (err or "?")
+        local ok, err = doTeleportNext(1, false)
+        if not ok then statusLabel.Text = "Ошибка: " .. (err or "?") end
     end
 end)
 
 btnNext.MouseButton1Click:Connect(function()
-    local list = getCurrentList()
-    if not list or #list == 0 then
-        statusLabel.Text = "Выберите класс!"
-        return
-    end
-    selectedIndex = selectedIndex + 1
-    if selectedIndex > #list then selectedIndex = 1 end
-    local ok, err = doTeleport()
-    if ok then
-        statusLabel.Text = string.format("[%s] %d/%d", selectedClass, selectedIndex, #list)
-    else
-        statusLabel.Text = "Ошибка: " .. (err or "?")
-    end
+    if not selectedClass then statusLabel.Text = "Сначала выберите класс!"; return end
+    local ok, err = doTeleportNext(1, false)
+    if not ok then statusLabel.Text = "Ошибка: " .. (err or "?") end
+end)
+
+btnPrev.MouseButton1Click:Connect(function()
+    if not selectedClass then statusLabel.Text = "Сначала выберите класс!"; return end
+    local ok, err = doTeleportNext(-1, false)
+    if not ok then statusLabel.Text = "Ошибка: " .. (err or "?") end
 end)
 
 -- === Цикл ===
 local looping = false
-local loopThread = nil
 
 local function stopLoop()
     looping = false
-    loopThread = nil
     btnLoop.Text = "▶ Цикл"
     btnLoop.BackgroundColor3 = Color3.fromRGB(60, 160, 90)
     statusLabel.Text = "Цикл остановлен"
 end
 
-local function startLoop()
-    if looping then return end
-    if not selectedClass then
-        statusLabel.Text = "Сначала выберите класс!"
-        return
-    end
+btnLoop.MouseButton1Click:Connect(function()
+    if looping then stopLoop(); return end
+    if not selectedClass then statusLabel.Text = "Сначала выберите класс!"; return end
+    
     looping = true
     btnLoop.Text = "■ Стоп"
     btnLoop.BackgroundColor3 = Color3.fromRGB(200, 70, 70)
-    loopThread = task.spawn(function()
-        local skipCount = 0
+    
+    task.spawn(function()
         while looping do
-            local list = getCurrentList()
-            if not list or #list == 0 then break end
-            selectedIndex = selectedIndex + 1
-            if selectedIndex > #list then selectedIndex = 1 end
-            local ok, err = doTeleport()
-            if ok then
-                skipCount = 0
-                statusLabel.Text = string.format("[LOOP %s] %d/%d", selectedClass, selectedIndex, #list)
-            else
-                skipCount = skipCount + 1
-                statusLabel.Text = string.format("Пропуск (%s): %d/%d", err or "?", selectedIndex, #list)
-                if skipCount >= #list then
-                    statusLabel.Text = "Нет деревьев с TrunkBase в классе!"
-                    looping = false
-                    btnLoop.Text = "▶ Цикл"
-                    btnLoop.BackgroundColor3 = Color3.fromRGB(60, 160, 90)
-                    break
-                end
+            local ok, err = doTeleportNext(1, true)
+            if not ok then
+                statusLabel.Text = "Цикл прерван: " .. (err or "?")
+                stopLoop()
+                break
             end
             local t0 = tick()
             while looping and (tick() - t0) < currentDelay do
@@ -648,45 +590,33 @@ local function startLoop()
             end
         end
     end)
-end
-
-btnLoop.MouseButton1Click:Connect(function()
-    if looping then stopLoop() else startLoop() end
 end)
 
--- === Сворачивание ===
-closeBtn.MouseButton1Click:Connect(function()
-    main.Visible = false
-    toggleBtn.Visible = true
-end)
-toggleBtn.MouseButton1Click:Connect(function()
-    main.Visible = true
-    toggleBtn.Visible = false
-end)
-
--- === Хоткей RightShift ===
-UserInputService.InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == Enum.KeyCode.RightShift then
-        if main.Visible then
-            main.Visible = false
-            toggleBtn.Visible = true
+-- === Авто-обновление (слежка за живыми) ===
+task.spawn(function()
+    while true do
+        task.wait(1) -- Проверяем каждую секунду
+        if not selectedClass then
+            rebuildDropdown()
         else
-            main.Visible = true
-            toggleBtn.Visible = false
+            local alive = getAliveCount(selectedClass)
+            dropdownBtn.Text = "  " .. selectedClass .. "  [" .. alive .. "]"
+            if dropdownList.Visible then rebuildDropdown() end
         end
     end
 end)
 
--- === Обновление списка ===
-treesFolder.ChildAdded:Connect(function()
-    scanTrees()
-    rebuildDropdown()
-end)
-treesFolder.ChildRemoved:Connect(function()
-    scanTrees()
-    rebuildDropdown()
+-- === Сворачивание и хоткей ===
+closeBtn.MouseButton1Click:Connect(function() main.Visible = false; toggleBtn.Visible = true end)
+toggleBtn.MouseButton1Click:Connect(function() main.Visible = true; toggleBtn.Visible = false end)
+
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.KeyCode == Enum.KeyCode.RightShift then
+        main.Visible = not main.Visible
+        toggleBtn.Visible = not main.Visible
+    end
 end)
 
 statusLabel.Text = string.format("Найдено классов: %d", #classNames)
-print("[TreeTP] Скрипт загружен. Классов:", #classNames)
+print("[TreeTP] Скрипт загружен (только живые деревья)")
