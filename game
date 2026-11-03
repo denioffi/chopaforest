@@ -32,7 +32,7 @@ end
 destroyOldGUI()
 
 -- === CONFIG ===
-local ROOT_NAMES = {"TrunkBase", "Trunk", "TreeBase"}
+local ROOT_NAMES = {"TrunkBase"}
 local OFFSET_DISTANCE = 6
 
 -- === Получаем папку Trees ===
