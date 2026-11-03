@@ -1,3 +1,6 @@
+-- LocalScript: Modern Tree Teleporter GUI
+-- Place in StarterPlayerScripts
+
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local TweenService = game:GetService("TweenService")
@@ -17,7 +20,6 @@ local function destroyOldGUI()
             print("[TreeTP] Удалён старый GUI:", name)
         end
     end
-    -- Дополнительно: удаляем любой ScreenGui с "tree" + "tp" в имени
     for _, child in ipairs(playerGui:GetChildren()) do
         if child:IsA("ScreenGui") then
             local lower = child.Name:lower()
@@ -30,7 +32,6 @@ end
 destroyOldGUI()
 
 -- === CONFIG ===
-local MAP_PATH = {"Map", "Trees"}
 local ROOT_NAMES = {"TrunkBase", "Trunk", "TreeBase"}
 local OFFSET_DISTANCE = 6
 
@@ -48,7 +49,7 @@ if not treesFolder then
 end
 
 -- === Собираем классы деревьев по имени модели ===
-local treeClasses = {} -- [className] = {models = {...}}
+local treeClasses = {}
 local function scanTrees()
     treeClasses = {}
     for _, model in ipairs(treesFolder:GetChildren()) do
@@ -63,7 +64,6 @@ local function scanTrees()
 end
 scanTrees()
 
--- Список классов
 local classNames = {}
 for name, list in pairs(treeClasses) do
     if #list > 0 then
@@ -72,7 +72,7 @@ for name, list in pairs(treeClasses) do
 end
 table.sort(classNames)
 
--- === Поиск точки телепорта (рядом с trunkbase) ===
+-- === Поиск точки телепорта ===
 local function getTeleportPoint(model)
     local basePart = nil
     for _, child in ipairs(model:GetDescendants()) do
@@ -87,7 +87,6 @@ local function getTeleportPoint(model)
         end
     end
     if not basePart then
-        -- фоллбэк: первая BasePart
         for _, child in ipairs(model:GetDescendants()) do
             if child:IsA("BasePart") then
                 basePart = child
@@ -99,7 +98,6 @@ local function getTeleportPoint(model)
 
     local pos = basePart.Position
     local look = basePart.CFrame.LookVector
-    -- точка рядом с основанием
     local point = pos + look * OFFSET_DISTANCE + Vector3.new(0, 3, 0)
     return point
 end
@@ -118,6 +116,7 @@ main.Position = UDim2.new(0, 20, 0, 20)
 main.BackgroundColor3 = Color3.fromRGB(20, 22, 30)
 main.BackgroundTransparency = 0.05
 main.BorderSizePixel = 0
+main.Active = true
 main.Parent = screenGui
 Instance.new("UICorner", main).CornerRadius = UDim.new(0, 12)
 
@@ -146,14 +145,14 @@ closeBtn.Size = UDim2.new(0, 32, 0, 32)
 closeBtn.Position = UDim2.new(1, -40, 0, 6)
 closeBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
 closeBtn.Text = "✕"
-closeBtn.TextColor3 = Color3.new(1,1,1)
+closeBtn.TextColor3 = Color3.new(1, 1, 1)
 closeBtn.Font = Enum.Font.GothamBold
 closeBtn.TextSize = 14
 closeBtn.BorderSizePixel = 0
 closeBtn.Parent = title
 Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 8)
 
--- Контейнер для контента (со скроллом)
+-- Скролл-контейнер
 local scroll = Instance.new("ScrollingFrame")
 scroll.Size = UDim2.new(1, -20, 1, -60)
 scroll.Position = UDim2.new(0, 10, 0, 54)
@@ -170,7 +169,6 @@ layout.Padding = UDim.new(0, 8)
 layout.SortOrder = Enum.SortOrder.LayoutOrder
 layout.Parent = scroll
 
--- Функция создания label
 local function makeLabel(text, color)
     local l = Instance.new("TextLabel")
     l.Size = UDim2.new(1, -8, 0, 22)
@@ -184,7 +182,7 @@ local function makeLabel(text, color)
     return l
 end
 
--- Кнопка "Открыть/Закрыть"
+-- Кнопка возврата
 local toggleBtn = Instance.new("TextButton")
 toggleBtn.Name = "Toggle"
 toggleBtn.Size = UDim2.new(0, 60, 0, 60)
@@ -193,7 +191,7 @@ toggleBtn.BackgroundColor3 = Color3.fromRGB(30, 34, 48)
 toggleBtn.Text = "🌳"
 toggleBtn.Font = Enum.Font.GothamBold
 toggleBtn.TextSize = 26
-toggleBtn.TextColor3 = Color3.new(1,1,1)
+toggleBtn.TextColor3 = Color3.new(1, 1, 1)
 toggleBtn.BorderSizePixel = 0
 toggleBtn.Visible = false
 toggleBtn.Parent = screenGui
@@ -203,27 +201,69 @@ tstroke.Color = Color3.fromRGB(70, 130, 255)
 tstroke.Thickness = 1.5
 tstroke.Parent = toggleBtn
 
--- Drag окна
-local dragging, dragStart, startPos
+-- === DRAG (мышь + тач, с защитой кнопок) ===
+local dragging = false
+local dragStart = nil
+local startPos = nil
+
+local function isIgnored(obj)
+    local cur = obj
+    while cur and cur ~= main do
+        if cur == closeBtn or cur:IsA("TextButton") or cur:IsA("ImageButton")
+            or cur:IsA("ScrollingFrame") then
+            return true
+        end
+        cur = cur.Parent
+    end
+    return false
+end
+
+local function startDrag(input)
+    dragging = true
+    dragStart = input.Position
+    startPos = main.Position
+end
+
 title.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragging = true
-        dragStart = input.Position
-        startPos = main.Position
+    if isIgnored(input.Target) then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
+        startDrag(input)
     end
-end)
-UserInputService.InputChanged:Connect(function(input)
-    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-        local delta = input.Position - dragStart
-        main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X,
-            startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-    end
-end)
-UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
 end)
 
--- === Выбор класса деревьев ===
+main.InputBegan:Connect(function(input)
+    if isIgnored(input.Target) then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
+        startDrag(input)
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if not dragging then return end
+    if input.UserInputType == Enum.UserInputType.MouseMovement
+        or input.UserInputType == Enum.UserInputType.Touch then
+        local delta = input.Position - dragStart
+        main.Position = UDim2.new(
+            startPos.X.Scale, startPos.X.Offset + delta.X,
+            startPos.Y.Scale, startPos.Y.Offset + delta.Y
+        )
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end)
+
+UserInputService.WindowFocusReleased:Connect(function()
+    dragging = false
+end)
+
+-- === Выбор класса ===
 makeLabel("Класс дерева:", Color3.fromRGB(120, 180, 255))
 
 local dropdownBtn = Instance.new("TextButton")
@@ -268,37 +308,40 @@ dlLayout.Parent = dlScroll
 local selectedClass = nil
 local selectedIndex = 0
 
-local function createDropdownItem(name)
-    local item = Instance.new("TextButton")
-    item.Size = UDim2.new(1, -4, 0, 26)
-    item.BackgroundColor3 = Color3.fromRGB(35, 40, 55)
-    item.Text = "  " .. name .. "  (" .. #treeClasses[name] .. ")"
-    item.Font = Enum.Font.Gotham
-    item.TextSize = 12
-    item.TextColor3 = Color3.fromRGB(190, 205, 235)
-    item.TextXAlignment = Enum.TextXAlignment.Left
-    item.BorderSizePixel = 0
-    item.Parent = dlScroll
-    Instance.new("UICorner", item).CornerRadius = UDim.new(0, 6)
-    item.MouseButton1Click:Connect(function()
-        selectedClass = name
-        selectedIndex = 0
-        dropdownBtn.Text = "  " .. name .. "  (" .. #treeClasses[name] .. ")"
-        dropdownList.Visible = false
-        statusLabel.Text = "Выбрано: " .. name .. " | " .. #treeClasses[name] .. " шт."
-    end)
-    item.MouseEnter:Connect(function()
-        item.BackgroundColor3 = Color3.fromRGB(50, 60, 90)
-    end)
-    item.MouseLeave:Connect(function()
-        item.BackgroundColor3 = Color3.fromRGB(35, 40, 55)
-    end)
-    return item
+local function rebuildDropdown()
+    for _, c in ipairs(dlScroll:GetChildren()) do
+        if c:IsA("TextButton") then c:Destroy() end
+    end
+    for _, name in ipairs(classNames) do
+        if treeClasses[name] and #treeClasses[name] > 0 then
+            local item = Instance.new("TextButton")
+            item.Size = UDim2.new(1, -4, 0, 26)
+            item.BackgroundColor3 = Color3.fromRGB(35, 40, 55)
+            item.Text = "  " .. name .. "  (" .. #treeClasses[name] .. ")"
+            item.Font = Enum.Font.Gotham
+            item.TextSize = 12
+            item.TextColor3 = Color3.fromRGB(190, 205, 235)
+            item.TextXAlignment = Enum.TextXAlignment.Left
+            item.BorderSizePixel = 0
+            item.Parent = dlScroll
+            Instance.new("UICorner", item).CornerRadius = UDim.new(0, 6)
+            item.MouseButton1Click:Connect(function()
+                selectedClass = name
+                selectedIndex = 0
+                dropdownBtn.Text = "  " .. name .. "  (" .. #treeClasses[name] .. ")"
+                dropdownList.Visible = false
+                statusLabel.Text = "Выбрано: " .. name .. " | " .. #treeClasses[name] .. " шт."
+            end)
+            item.MouseEnter:Connect(function()
+                item.BackgroundColor3 = Color3.fromRGB(50, 60, 90)
+            end)
+            item.MouseLeave:Connect(function()
+                item.BackgroundColor3 = Color3.fromRGB(35, 40, 55)
+            end)
+        end
+    end
 end
-
-for _, name in ipairs(classNames) do
-    createDropdownItem(name)
-end
+rebuildDropdown()
 
 dropdownBtn.MouseButton1Click:Connect(function()
     dropdownList.Visible = not dropdownList.Visible
@@ -338,7 +381,6 @@ delayValueLabel.BorderSizePixel = 0
 delayValueLabel.Parent = delayFrame
 Instance.new("UICorner", delayValueLabel).CornerRadius = UDim.new(0, 6)
 
--- Кастомный ползунок
 local sliderBg = Instance.new("Frame")
 sliderBg.Size = UDim2.new(1, -20, 0, 6)
 sliderBg.Position = UDim2.new(0, 10, 0, 40)
@@ -382,7 +424,14 @@ local function handleSliderInput(input)
 end
 
 sliderBg.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
+        sliding = true
+        handleSliderInput(input)
+    end
+end)
+sliderKnob.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
         or input.UserInputType == Enum.UserInputType.Touch then
         sliding = true
         handleSliderInput(input)
@@ -421,7 +470,7 @@ local function makeButton(text, color)
     b.Text = text
     b.Font = Enum.Font.GothamBold
     b.TextSize = 13
-    b.TextColor3 = Color3.new(1,1,1)
+    b.TextColor3 = Color3.new(1, 1, 1)
     b.BorderSizePixel = 0
     b.AutoButtonColor = true
     b.Parent = btnFrame
@@ -443,7 +492,6 @@ local function teleportToModel(model)
     if not char then return false end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     if not hrp then return false end
-    -- Смещение от точки к игроку, чтобы смотрел на дерево
     local lookAt = (model.PrimaryPart and model.PrimaryPart.Position or point) - point
     lookAt = Vector3.new(lookAt.X, 0, lookAt.Z)
     local cframe
@@ -555,7 +603,7 @@ btnLoop.MouseButton1Click:Connect(function()
     if looping then stopLoop() else startLoop() end
 end)
 
--- === Сворачивание/разворачивание ===
+-- === Сворачивание ===
 closeBtn.MouseButton1Click:Connect(function()
     main.Visible = false
     toggleBtn.Visible = true
@@ -565,7 +613,7 @@ toggleBtn.MouseButton1Click:Connect(function()
     toggleBtn.Visible = false
 end)
 
--- === Хоткей для скрытия (RightShift) ===
+-- === Хоткей RightShift ===
 UserInputService.InputBegan:Connect(function(input, gp)
     if gp then return end
     if input.KeyCode == Enum.KeyCode.RightShift then
@@ -579,9 +627,25 @@ UserInputService.InputBegan:Connect(function(input, gp)
     end
 end)
 
--- === Обновление списка при добавлении/удалении деревьев ===
-treesFolder.ChildAdded:Connect(function() scanTrees() end)
-treesFolder.ChildRemoved:Connect(function() scanTrees() end)
+-- === Обновление при изменении папки ===
+treesFolder.ChildAdded:Connect(function()
+    scanTrees()
+    classNames = {}
+    for name, list in pairs(treeClasses) do
+        if #list > 0 then table.insert(classNames, name) end
+    end
+    table.sort(classNames)
+    rebuildDropdown()
+end)
+treesFolder.ChildRemoved:Connect(function()
+    scanTrees()
+    classNames = {}
+    for name, list in pairs(treeClasses) do
+        if #list > 0 then table.insert(classNames, name) end
+    end
+    table.sort(classNames)
+    rebuildDropdown()
+end)
 
 statusLabel.Text = string.format("Найдено классов: %d", #classNames)
 print("[TreeTP] Скрипт загружен. Классов:", #classNames)
