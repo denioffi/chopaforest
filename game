@@ -1,0 +1,675 @@
+--!strict
+-- LocalScript: Tree Teleporter GUI (с очисткой старого GUI)
+-- StarterPlayer > StarterPlayerScripts
+-- Путь: Workspace.Map.Trees
+
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- ============================================================
+-- ⚠️ УДАЛЕНИЕ СТАРОГО GUI
+-- ============================================================
+local GUI_NAME = "TreeTeleporterGui"
+
+-- Удаляем все возможные дубликаты (включая варианты по имени)
+for _, child in ipairs(playerGui:GetChildren()) do
+	if child.Name == GUI_NAME or child.Name == GUI_NAME .. "_Old" then
+		child:Destroy()
+	end
+end
+
+-- На случай, если GUI был создан другим скриптом под тем же именем,
+-- но уже успел размножиться — чистим папку целиком по тегу
+for _, child in ipairs(playerGui:GetChildren()) do
+	if child:IsA("ScreenGui") and child.Name:find("TreeTeleporter") then
+		child:Destroy()
+	end
+end
+
+-- ============================================================
+-- НАСТРОЙКИ
+-- ============================================================
+local MAP_MODEL_NAME = "Map"
+local TREES_FOLDER_NAME = "Trees"
+local TRUNK_BASE_NAME = "TrunkBase"
+local TELEPORT_OFFSET = Vector3.new(0, 5, 8)
+
+local DELAY_MIN = 0.2
+local DELAY_MAX = 5.0
+local DELAY_DEFAULT = 1.5
+local DELAY_STEP = 0.1
+
+-- ============================================================
+-- СОСТОЯНИЕ
+-- ============================================================
+local savedCFrame: CFrame? = nil
+local savedClassName: string? = nil
+local isAway: boolean = false
+local teleportDelay: number = DELAY_DEFAULT
+local activeCountdown: (() -> ())? = nil
+
+-- ============================================================
+-- УТИЛИТА
+-- ============================================================
+local function findChildCI(parent: Instance, name: string): Instance?
+	local direct = parent:FindFirstChild(name)
+	if direct then return direct end
+	local lower = string.lower(name)
+	for _, c in ipairs(parent:GetChildren()) do
+		if string.lower(c.Name) == lower then return c end
+	end
+	return nil
+end
+
+local function resolveTreesFolder(): Folder?
+	local map = findChildCI(Workspace, MAP_MODEL_NAME)
+	if not map then return nil end
+	local trees = findChildCI(map, TREES_FOLDER_NAME)
+	if trees and trees:IsA("Folder") then return trees end
+	return nil
+end
+
+local treesFolder = resolveTreesFolder()
+if not treesFolder then
+	for _ = 1, 50 do
+		task.wait(0.2)
+		treesFolder = resolveTreesFolder()
+		if treesFolder then break end
+	end
+end
+
+if not treesFolder then
+	warn("[TreeTeleporter] Не удалось найти Workspace.Map.Trees.")
+	return
+end
+local treesFolderRef = treesFolder :: Folder
+
+local function collectTreeClasses(): { [string]: { Model } }
+	local classes: { [string]: { Model } } = {}
+	for _, obj in ipairs(treesFolderRef:GetChildren()) do
+		if obj:IsA("Model") then
+			classes[obj.Name] = classes[obj.Name] or {}
+			table.insert(classes[obj.Name], obj)
+		end
+	end
+	return classes
+end
+
+-- ============================================================
+-- GUI
+-- ============================================================
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = GUI_NAME
+screenGui.ResetOnSpawn = false
+screenGui.IgnoreGuiInset = true
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.DisplayOrder = 100
+screenGui.Parent = playerGui
+
+-- Toggle
+local toggleBtn = Instance.new("TextButton")
+toggleBtn.Size = UDim2.fromOffset(56, 56)
+toggleBtn.Position = UDim2.new(0, 20, 0.5, -28)
+toggleBtn.BackgroundColor3 = Color3.fromRGB(30, 34, 45)
+toggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleBtn.Font = Enum.Font.GothamBold
+toggleBtn.TextSize = 24
+toggleBtn.Text = "🌲"
+toggleBtn.AutoButtonColor = false
+toggleBtn.BorderSizePixel = 0
+toggleBtn.Parent = screenGui
+
+local tcc = Instance.new("UICorner"); tcc.CornerRadius = UDim.new(1, 0); tcc.Parent = toggleBtn
+local tst = Instance.new("UIStroke"); tst.Color = Color3.fromRGB(80, 160, 255); tst.Thickness = 2; tst.Transparency = 0.3; tst.Parent = toggleBtn
+local tgr = Instance.new("UIGradient")
+tgr.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(40, 44, 60)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 24, 35)),
+})
+tgr.Rotation = 90; tgr.Parent = toggleBtn
+
+-- Панель
+local panel = Instance.new("Frame")
+panel.Size = UDim2.fromOffset(340, 530)
+panel.Position = UDim2.new(0, 90, 0.5, -265)
+panel.BackgroundColor3 = Color3.fromRGB(24, 27, 36)
+panel.BorderSizePixel = 0
+panel.Visible = false
+panel.Parent = screenGui
+
+local pcc = Instance.new("UICorner"); pcc.CornerRadius = UDim.new(0, 14); pcc.Parent = panel
+local pst = Instance.new("UIStroke"); pst.Color = Color3.fromRGB(80, 90, 120); pst.Thickness = 1; pst.Transparency = 0.5; pst.Parent = panel
+local pgr = Instance.new("UIGradient")
+pgr.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(32, 36, 48)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(18, 21, 28)),
+})
+pgr.Rotation = 90; pgr.Parent = panel
+
+local titleBar = Instance.new("Frame")
+titleBar.Size = UDim2.new(1, 0, 0, 52)
+titleBar.BackgroundTransparency = 1
+titleBar.Parent = panel
+
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Size = UDim2.new(1, -70, 0, 52)
+titleLabel.Position = UDim2.fromOffset(18, 0)
+titleLabel.BackgroundTransparency = 1
+titleLabel.Text = "🌲  Телепорт к деревьям"
+titleLabel.Font = Enum.Font.GothamBold
+titleLabel.TextSize = 17
+titleLabel.TextColor3 = Color3.fromRGB(235, 240, 255)
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+titleLabel.Parent = titleBar
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.fromOffset(30, 30)
+closeBtn.Position = UDim2.new(1, -40, 0, 11)
+closeBtn.BackgroundColor3 = Color3.fromRGB(220, 70, 70)
+closeBtn.Text = "✕"
+closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.TextSize = 14
+closeBtn.AutoButtonColor = false
+closeBtn.BorderSizePixel = 0
+closeBtn.Parent = titleBar
+
+local ccc = Instance.new("UICorner"); ccc.CornerRadius = UDim.new(0, 8); ccc.Parent = closeBtn
+
+-- ============================================================
+-- ЗАДЕРЖКА
+-- ============================================================
+local delayBox = Instance.new("Frame")
+delayBox.Size = UDim2.new(1, -28, 0, 64)
+delayBox.Position = UDim2.fromOffset(14, 60)
+delayBox.BackgroundColor3 = Color3.fromRGB(15, 18, 24)
+delayBox.BorderSizePixel = 0
+delayBox.Parent = panel
+
+local dcc = Instance.new("UICorner"); dcc.CornerRadius = UDim.new(0, 8); dcc.Parent = delayBox
+local dst = Instance.new("UIStroke"); dst.Color = Color3.fromRGB(80, 90, 120); dst.Thickness = 1; dst.Transparency = 0.5; dst.Parent = delayBox
+
+local delayTitle = Instance.new("TextLabel")
+delayTitle.Size = UDim2.new(1, -110, 0, 20)
+delayTitle.Position = UDim2.fromOffset(12, 8)
+delayTitle.BackgroundTransparency = 1
+delayTitle.Text = "⏱ Задержка телепорта"
+delayTitle.Font = Enum.Font.GothamBold
+delayTitle.TextSize = 12
+delayTitle.TextColor3 = Color3.fromRGB(180, 190, 215)
+delayTitle.TextXAlignment = Enum.TextXAlignment.Left
+delayTitle.Parent = delayBox
+
+local delayValue = Instance.new("TextLabel")
+delayValue.Size = UDim2.fromOffset(100, 20)
+delayValue.Position = UDim2.new(1, -112, 0, 8)
+delayValue.BackgroundTransparency = 1
+delayValue.Text = ("%.1f сек"):format(teleportDelay)
+delayValue.Font = Enum.Font.GothamBold
+delayValue.TextSize = 12
+delayValue.TextColor3 = Color3.fromRGB(120, 200, 255)
+delayValue.TextXAlignment = Enum.TextXAlignment.Right
+delayValue.Parent = delayBox
+
+local sliderBg = Instance.new("Frame")
+sliderBg.Size = UDim2.new(1, -24, 0, 8)
+sliderBg.Position = UDim2.fromOffset(12, 36)
+sliderBg.BackgroundColor3 = Color3.fromRGB(40, 44, 60)
+sliderBg.BorderSizePixel = 0
+sliderBg.Parent = delayBox
+
+local sbc = Instance.new("UICorner"); sbc.CornerRadius = UDim.new(1, 0); sbc.Parent = sliderBg
+
+local sliderFill = Instance.new("Frame")
+sliderFill.Size = UDim2.new(0, 0, 1, 0)
+sliderFill.BackgroundColor3 = Color3.fromRGB(70, 150, 255)
+sliderFill.BorderSizePixel = 0
+sliderFill.Parent = sliderBg
+
+local sfc = Instance.new("UICorner"); sfc.CornerRadius = UDim.new(1, 0); sfc.Parent = sliderFill
+
+local sliderKnob = Instance.new("Frame")
+sliderKnob.Size = UDim2.fromOffset(16, 16)
+sliderKnob.Position = UDim2.new(0, 0, 0.5, -8)
+sliderKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+sliderKnob.BorderSizePixel = 0
+sliderKnob.ZIndex = 2
+sliderKnob.Parent = sliderBg
+
+local skc = Instance.new("UICorner"); skc.CornerRadius = UDim.new(1, 0); skc.Parent = sliderKnob
+
+local function updateSliderVisual()
+	local alpha = (teleportDelay - DELAY_MIN) / (DELAY_MAX - DELAY_MIN)
+	sliderFill.Size = UDim2.new(alpha, 0, 1, 0)
+	sliderKnob.Position = UDim2.new(alpha, -8, 0.5, -8)
+	delayValue.Text = ("%.1f сек"):format(teleportDelay)
+end
+updateSliderVisual()
+
+local function setFromInput(inputX: number)
+	local absPos = sliderBg.AbsolutePosition.X
+	local absSize = sliderBg.AbsoluteSize.X
+	local alpha = math.clamp((inputX - absPos) / absSize, 0, 1)
+	local raw = DELAY_MIN + alpha * (DELAY_MAX - DELAY_MIN)
+	teleportDelay = math.floor(raw / DELAY_STEP + 0.5) * DELAY_STEP
+	teleportDelay = math.clamp(teleportDelay, DELAY_MIN, DELAY_MAX)
+	updateSliderVisual()
+end
+
+local draggingSlider = false
+sliderBg.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		draggingSlider = true
+		setFromInput(input.Position.X)
+	end
+end)
+UserInputService.InputChanged:Connect(function(input)
+	if draggingSlider and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+		setFromInput(input.Position.X)
+	end
+end)
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		draggingSlider = false
+	end
+end)
+
+-- ============================================================
+-- ПОИСК + СПИСОК
+-- ============================================================
+local searchBox = Instance.new("TextBox")
+searchBox.Size = UDim2.new(1, -28, 0, 36)
+searchBox.Position = UDim2.fromOffset(14, 132)
+searchBox.BackgroundColor3 = Color3.fromRGB(15, 18, 24)
+searchBox.TextColor3 = Color3.fromRGB(220, 225, 240)
+searchBox.PlaceholderText = "🔍 Поиск класса дерева..."
+searchBox.PlaceholderColor3 = Color3.fromRGB(120, 130, 150)
+searchBox.Font = Enum.Font.Gotham
+searchBox.TextSize = 14
+searchBox.Text = ""
+searchBox.ClearTextOnFocus = false
+searchBox.TextXAlignment = Enum.TextXAlignment.Left
+searchBox.BorderSizePixel = 0
+searchBox.Parent = panel
+
+local sbc2 = Instance.new("UICorner"); sbc2.CornerRadius = UDim.new(0, 8); sbc2.Parent = searchBox
+local spp = Instance.new("UIPadding"); spp.PaddingLeft = UDim.new(0, 12); spp.PaddingRight = UDim.new(0, 12); spp.Parent = searchBox
+local sst = Instance.new("UIStroke"); sst.Color = Color3.fromRGB(80, 90, 120); sst.Thickness = 1; sst.Transparency = 0.5; sst.Parent = searchBox
+
+local scrollFrame = Instance.new("ScrollingFrame")
+scrollFrame.Size = UDim2.new(1, -28, 1, -240)
+scrollFrame.Position = UDim2.fromOffset(14, 180)
+scrollFrame.BackgroundTransparency = 1
+scrollFrame.BorderSizePixel = 0
+scrollFrame.ScrollBarThickness = 4
+scrollFrame.ScrollBarImageColor3 = Color3.fromRGB(90, 100, 130)
+scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+scrollFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+scrollFrame.Parent = panel
+
+local listLayout = Instance.new("UIListLayout")
+listLayout.Padding = UDim.new(0, 8)
+listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+listLayout.Parent = scrollFrame
+
+local listPad = Instance.new("UIPadding"); listPad.PaddingRight = UDim.new(0, 4); listPad.Parent = scrollFrame
+
+local footer = Instance.new("Frame")
+footer.Size = UDim2.new(1, -28, 0, 36)
+footer.Position = UDim2.new(0, 14, 1, -44)
+footer.BackgroundTransparency = 1
+footer.Parent = panel
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(1, -90, 1, 0)
+statusLabel.BackgroundColor3 = Color3.fromRGB(15, 18, 24)
+statusLabel.TextColor3 = Color3.fromRGB(150, 160, 180)
+statusLabel.Font = Enum.Font.Gotham
+statusLabel.TextSize = 12
+statusLabel.Text = "Готов к работе"
+statusLabel.BorderSizePixel = 0
+statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+statusLabel.Parent = footer
+
+local slc = Instance.new("UICorner"); slc.CornerRadius = UDim.new(0, 8); slc.Parent = statusLabel
+local slp = Instance.new("UIPadding"); slp.PaddingLeft = UDim.new(0, 10); slp.Parent = statusLabel
+
+local resetBtn = Instance.new("TextButton")
+resetBtn.Size = UDim2.fromOffset(80, 36)
+resetBtn.Position = UDim2.new(1, -80, 0, 0)
+resetBtn.BackgroundColor3 = Color3.fromRGB(50, 55, 70)
+resetBtn.Text = "Сбросить"
+resetBtn.TextColor3 = Color3.fromRGB(200, 210, 230)
+resetBtn.Font = Enum.Font.GothamBold
+resetBtn.TextSize = 12
+resetBtn.AutoButtonColor = false
+resetBtn.BorderSizePixel = 0
+resetBtn.Parent = footer
+
+local rcc = Instance.new("UICorner"); rcc.CornerRadius = UDim.new(0, 8); rcc.Parent = resetBtn
+local rst = Instance.new("UIStroke"); rst.Color = Color3.fromRGB(90, 100, 130); rst.Thickness = 1; rst.Transparency = 0.5; rst.Parent = resetBtn
+
+-- ============================================================
+-- ЛОГИКА
+-- ============================================================
+local classes = collectTreeClasses()
+
+local function getSortedNames(): { string }
+	local names = {}
+	for n in pairs(classes) do table.insert(names, n) end
+	table.sort(names, function(a, b) return string.lower(a) < string.lower(b) end)
+	return names
+end
+
+local function setStatus(text: string, color: Color3?)
+	statusLabel.Text = text
+	statusLabel.TextColor3 = color or Color3.fromRGB(150, 160, 180)
+end
+
+local function getHRP(): BasePart?
+	local char = player.Character
+	return char and char:FindFirstChild("HumanoidRootPart") :: BasePart?
+end
+
+local function cancelCountdown()
+	if activeCountdown then
+		local cancel = activeCountdown
+		activeCountdown = nil
+		cancel()
+	end
+end
+
+local function returnToSavedPoint()
+	if not savedCFrame then
+		setStatus("⚠ Нет сохранённой точки", Color3.fromRGB(255, 200, 100))
+		return
+	end
+	local hrp = getHRP()
+	if not hrp then
+		setStatus("❌ Персонаж не найден", Color3.fromRGB(255, 100, 100))
+		return
+	end
+	hrp.CFrame = savedCFrame
+	savedCFrame = nil
+	savedClassName = nil
+	isAway = false
+	setStatus("↩ Возврат выполнен", Color3.fromRGB(120, 220, 140))
+	refreshList()
+end
+
+local function startTeleportWithDelay(className: string, onButtonUpdate: ((string) -> ())?)
+	local list = classes[className]
+	if not list or #list == 0 then
+		setStatus("❌ Класс не найден", Color3.fromRGB(255, 100, 100))
+		return nil
+	end
+
+	local hrp = getHRP()
+	if not hrp then
+		setStatus("❌ Персонаж не найден", Color3.fromRGB(255, 100, 100))
+		return nil
+	end
+
+	if isAway and savedClassName == className and savedCFrame then
+		returnToSavedPoint()
+		return nil
+	end
+
+	local valid: { BasePart } = {}
+	for _, model in ipairs(list) do
+		local base = model:FindFirstChild(TRUNK_BASE_NAME, true)
+		if base and base:IsA("BasePart") then
+			table.insert(valid, base)
+		end
+	end
+	if #valid == 0 then
+		setStatus("❌ Нет TrunkBase в деревьях", Color3.fromRGB(255, 100, 100))
+		return nil
+	end
+
+	if not isAway then
+		savedCFrame = hrp.CFrame
+	end
+
+	local cancelled = false
+	local remaining = teleportDelay
+
+	local function cancel()
+		cancelled = true
+		if onButtonUpdate then onButtonUpdate("TP") end
+		setStatus("⏹ Телепорт отменён", Color3.fromRGB(255, 200, 100))
+	end
+
+	task.spawn(function()
+		local lastWhole = math.ceil(remaining)
+		while remaining > 0 do
+			if cancelled then return end
+			local dt = RunService.Heartbeat:Wait()
+			remaining -= dt
+			local whole = math.max(0, math.ceil(remaining))
+			if whole ~= lastWhole and onButtonUpdate then
+				onButtonUpdate(whole > 0 and tostring(whole) or "…")
+				lastWhole = whole
+			end
+		end
+		if cancelled then return end
+
+		local hrpNow = getHRP()
+		if not hrpNow then
+			setStatus("❌ Персонаж потерян", Color3.fromRGB(255, 100, 100))
+			if onButtonUpdate then onButtonUpdate("TP") end
+			return
+		end
+
+		local target = valid[math.random(1, #valid)]
+		local targetPos = target.Position + TELEPORT_OFFSET
+		local oldCF = hrpNow.CFrame
+		hrpNow.CFrame = CFrame.new(targetPos, target.Position) * (oldCF - oldCF.Position)
+
+		isAway = true
+		savedClassName = className
+		setStatus(("✅ У '%s' (%d). Нажми ещё — вернёт"):format(className, #valid), Color3.fromRGB(120, 220, 140))
+		if onButtonUpdate then onButtonUpdate("↩ Назад") end
+		refreshList()
+	end)
+
+	activeCountdown = function()
+		cancelled = true
+	end
+	return cancel
+end
+
+local function createListItem(name: string, index: number, count: number)
+	local atThisClass = isAway and savedClassName == name
+	local isCounting = activeCountdown ~= nil and savedClassName == name
+
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(1, 0, 0, 48)
+	btn.BackgroundColor3 = atThisClass and Color3.fromRGB(50, 80, 60) or Color3.fromRGB(30, 34, 45)
+	btn.AutoButtonColor = false
+	btn.BorderSizePixel = 0
+	btn.Text = ""
+	btn.LayoutOrder = index
+	btn.Parent = scrollFrame
+
+	local corner = Instance.new("UICorner"); corner.CornerRadius = UDim.new(0, 10); corner.Parent = btn
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = atThisClass and Color3.fromRGB(120, 220, 140) or Color3.fromRGB(70, 80, 110)
+	stroke.Thickness = 1
+	stroke.Transparency = atThisClass and 0.3 or 0.6
+	stroke.Parent = btn
+
+	local icon = Instance.new("TextLabel")
+	icon.Size = UDim2.fromOffset(32, 32)
+	icon.Position = UDim2.fromOffset(10, 8)
+	icon.BackgroundColor3 = Color3.fromRGB(40, 60, 45)
+	icon.Text = "🌳"
+	icon.TextSize = 18
+	icon.Font = Enum.Font.Gotham
+	icon.TextColor3 = Color3.fromRGB(150, 230, 160)
+	icon.BorderSizePixel = 0
+	icon.Parent = btn
+
+	local icc = Instance.new("UICorner"); icc.CornerRadius = UDim.new(0, 8); icc.Parent = icon
+
+	local nameLabel = Instance.new("TextLabel")
+	nameLabel.Size = UDim2.new(1, -110, 0, 22)
+	nameLabel.Position = UDim2.fromOffset(50, 6)
+	nameLabel.BackgroundTransparency = 1
+	nameLabel.Text = name
+	nameLabel.Font = Enum.Font.GothamBold
+	nameLabel.TextSize = 14
+	nameLabel.TextColor3 = Color3.fromRGB(230, 235, 250)
+	nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+	nameLabel.TextTruncate = Enum.TextTruncate.AtEnd
+	nameLabel.Parent = btn
+
+	local countLabel = Instance.new("TextLabel")
+	countLabel.Size = UDim2.new(1, -110, 0, 16)
+	countLabel.Position = UDim2.fromOffset(50, 26)
+	countLabel.BackgroundTransparency = 1
+	countLabel.Text = ("%d шт."):format(count)
+	countLabel.Font = Enum.Font.Gotham
+	countLabel.TextSize = 11
+	countLabel.TextColor3 = Color3.fromRGB(140, 150, 175)
+	countLabel.TextXAlignment = Enum.TextXAlignment.Left
+	countLabel.Parent = btn
+
+	local tpBtn = Instance.new("TextButton")
+	tpBtn.Size = UDim2.fromOffset(64, 30)
+	tpBtn.Position = UDim2.new(1, -74, 0.5, -15)
+	tpBtn.BackgroundColor3 = atThisClass and Color3.fromRGB(220, 130, 60) or Color3.fromRGB(60, 130, 240)
+	tpBtn.Text = atThisClass and "↩ Назад" or "TP"
+	tpBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	tpBtn.Font = Enum.Font.GothamBold
+	tpBtn.TextSize = 12
+	tpBtn.AutoButtonColor = false
+	tpBtn.BorderSizePixel = 0
+	tpBtn.Parent = btn
+
+	local tcc2 = Instance.new("UICorner"); tcc2.CornerRadius = UDim.new(0, 8); tcc2.Parent = tpBtn
+
+	local function setBtnText(s: string)
+		tpBtn.Text = s
+	end
+
+	local function doTP()
+		if activeCountdown then
+			cancelCountdown()
+			setBtnText("TP")
+			return
+		end
+		if isAway and savedClassName == name then
+			returnToSavedPoint()
+			return
+		end
+		startTeleportWithDelay(name, setBtnText)
+	end
+
+	btn.MouseButton1Click:Connect(doTP)
+	tpBtn.MouseButton1Click:Connect(doTP)
+
+	tpBtn.MouseButton1Down:Connect(function()
+		TweenService:Create(tpBtn, TweenInfo.new(0.08), { Size = UDim2.fromOffset(60, 28) }):Play()
+	end)
+	tpBtn.MouseButton1Up:Connect(function()
+		TweenService:Create(tpBtn, TweenInfo.new(0.08), { Size = UDim2.fromOffset(64, 30) }):Play()
+	end)
+end
+
+local function refreshList()
+	cancelCountdown()
+	for _, child in ipairs(scrollFrame:GetChildren()) do
+		if child:IsA("TextButton") then child:Destroy() end
+	end
+
+	local query = string.lower(searchBox.Text)
+	local index = 1
+	for _, name in ipairs(getSortedNames()) do
+		if query == "" or string.find(string.lower(name), query, 1, true) then
+			createListItem(name, index, #classes[name])
+			index += 1
+		end
+	end
+end
+
+treesFolderRef.ChildAdded:Connect(function()
+	classes = collectTreeClasses()
+	refreshList()
+end)
+treesFolderRef.ChildRemoved:Connect(function()
+	classes = collectTreeClasses()
+	refreshList()
+end)
+
+-- ============================================================
+-- UI
+-- ============================================================
+local isOpen = false
+local function setOpen(v: boolean)
+	isOpen = v
+	panel.Visible = v
+	panel.Size = UDim2.fromOffset(340, 0)
+	if v then
+		refreshList()
+		TweenService:Create(panel, TweenInfo.new(0.2), { Size = UDim2.fromOffset(340, 530) }):Play()
+	end
+end
+
+toggleBtn.MouseButton1Click:Connect(function() setOpen(not isOpen) end)
+closeBtn.MouseButton1Click:Connect(function() setOpen(false) end)
+
+resetBtn.MouseButton1Click:Connect(function()
+	savedCFrame = nil
+	savedClassName = nil
+	isAway = false
+	cancelCountdown()
+	setStatus("🗑 Точка возврата сброшена", Color3.fromRGB(255, 200, 100))
+	refreshList()
+end)
+
+local searchDebounce = 0
+searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+	searchDebounce += 1
+	local cur = searchDebounce
+	task.delay(0.12, function()
+		if cur == searchDebounce then refreshList() end
+	end)
+end)
+
+do
+	local dragging = false
+	local dragStart, startPos
+	titleBar.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			startPos = panel.Position
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			local delta = input.Position - dragStart
+			panel.Position = UDim2.new(
+				startPos.X.Scale, startPos.X.Offset + delta.X,
+				startPos.Y.Scale, startPos.Y.Offset + delta.Y
+			)
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end)
+end
+
+-- ============================================================
+-- СТАРТ
+-- ============================================================
+refreshList()
