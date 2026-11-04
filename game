@@ -291,36 +291,67 @@ local function isIgnored(obj)
     return false
 end
 
-local function startDrag(input)
-    dragging = true
-    dragStart = input.Position
-    startPos = main.Position
+-- === DRAG (исправленный) ===
+local dragging = false
+local dragStart = nil      -- Vector2 (экранные координаты)
+local startPos = nil       -- UDim2 (позиция main на момент старта)
+
+-- Возвращает true, если по этому объекту НЕЛЬЗЯ начинать drag
+local function isDragBlocker(obj)
+    if not obj then return true end
+    local cur = obj
+    while cur and cur ~= main do
+        if cur == closeBtn then return true end
+        if cur:IsA("TextButton") or cur:IsA("ImageButton") then return true end
+        if cur:IsA("ScrollingFrame") then return true end
+        if cur:IsA("TextBox") or cur:IsA("TextBox") then return true end
+        cur = cur.Parent
+    end
+    return false
 end
 
-title.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        if not isIgnored(input.Target) then startDrag(input) end
-    end
-end)
-
+-- Старт drag через InputBegan на самом main (ловит клики по title, фону, UICorner)
 main.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        if not isIgnored(input.Target) then startDrag(input) end
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
+        if isDragBlocker(input.Target) then return end
+        dragging = true
+        dragStart = Vector2.new(input.Position.X, input.Position.Y)
+        startPos = main.Position
     end
 end)
 
+-- Движение: считаем дельту в пикселях и прибавляем к Offset
 UserInputService.InputChanged:Connect(function(input)
     if not dragging then return end
-    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-        local delta = input.Position - dragStart
-        main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    if input.UserInputType ~= Enum.UserInputType.MouseMovement
+        and input.UserInputType ~= Enum.UserInputType.Touch then return end
+    if not dragStart then return end
+
+    local cur = Vector2.new(input.Position.X, input.Position.Y)
+    local delta = cur - dragStart
+
+    main.Position = UDim2.new(
+        startPos.X.Scale,
+        startPos.X.Offset + delta.X,
+        startPos.Y.Scale,
+        startPos.Y.Offset + delta.Y
+    )
+end)
+
+-- Конец drag — по отпусканию ЛКМ или Touch, плюс страховка
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+        dragStart = nil
     end
 end)
 
-UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = false
-    end
+-- Страховка: если окно потеряло фокус — сбрасываем drag
+UserInputService.WindowFocusReleased:Connect(function()
+    dragging = false
+    dragStart = nil
 end)
 
 -- === Выбор класса ===
