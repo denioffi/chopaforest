@@ -30,6 +30,7 @@ destroyOldGUI()
 -- === CONFIG ===
 local OFFSET_DISTANCE = 6 
 local HEIGHT_OFFSET = 3   
+local SELL_HEIGHT = 3
 
 -- === Папка Trees ===
 local map = Workspace:FindFirstChild("Map")
@@ -48,7 +49,6 @@ local function hasTrunk(model)
 end
 
 local function isAlive(model)
-    -- Дерево "живое", если у него есть модель/часть с именем Top
     for _, v in ipairs(model:GetChildren()) do
         if v.Name == "Top" then return true end
     end
@@ -67,9 +67,7 @@ local function scanTrees()
     for _, model in ipairs(treesFolder:GetChildren()) do
         if model:IsA("Model") then
             local name = model.Name
-            if not treeClasses[name] then
-                treeClasses[name] = {}
-            end
+            if not treeClasses[name] then treeClasses[name] = {} end
             table.insert(treeClasses[name], model)
         end
     end
@@ -100,20 +98,90 @@ local function faceDirection(look)
     local flatLook = Vector3.new(look.X, 0, look.Z)
     if flatLook.Magnitude < 0.01 then return end
     flatLook = flatLook.Unit
-    
     hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + flatLook)
-    
-    local conn
-    local frames = 0
+    local conn, frames = nil, 0
     conn = RunService.RenderStepped:Connect(function()
         frames = frames + 1
-        if frames > 15 or not hrp.Parent then
-            conn:Disconnect()
-            return
-        end
+        if frames > 15 or not hrp.Parent then conn:Disconnect(); return end
         local camPos = camera.CFrame.Position
         camera.CFrame = CFrame.lookAt(camPos, camPos + flatLook)
     end)
+end
+
+-- === Поиск SellSpot (в Map) и SellOutpost (в Workspace) ===
+local function collectSellTargets()
+    local spots = {}   -- {part=..., kind="SellSpot"/"SellOutpost"}
+    if map then
+        for _, v in ipairs(map:GetDescendants()) do
+            if v:IsA("BasePart") and v.Name == "SellSpot" then
+                table.insert(spots, {part = v, kind = "SellSpot"})
+            elseif v:IsA("Model") and v.Name == "SellSpot" then
+                local p = v:FindFirstChildWhichIsA("BasePart") or v.PrimaryPart
+                if p then table.insert(spots, {part = p, kind = "SellSpot"}) end
+            end
+        end
+    end
+    for _, v in ipairs(Workspace:GetDescendants()) do
+        if v:IsA("BasePart") and v.Name == "SellOutpost" then
+            table.insert(spots, {part = v, kind = "SellOutpost"})
+        elseif v:IsA("Model") and v.Name == "SellOutpost" then
+            local p = v:FindFirstChildWhichIsA("BasePart") or v.PrimaryPart
+            if p then table.insert(spots, {part = p, kind = "SellOutpost"}) end
+        end
+    end
+    return spots
+end
+
+-- Телепорт к BasePart с учётом высоты и поворота лицом к точке
+local function teleportToPart(part)
+    if not part or not part.Parent then return false, "нет части" end
+    local char = player.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum then return false, "нет персонажа" end
+
+    local point = part.Position + Vector3.new(0, SELL_HEIGHT, 0)
+    local flatLook = Vector3.new(part.Position.X - point.X, 0, part.Position.Z - point.Z)
+    local cf
+    if flatLook.Magnitude > 0.1 then
+        cf = CFrame.lookAt(point, point + flatLook.Unit)
+    else
+        cf = CFrame.new(point)
+    end
+
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.AssemblyAngularVelocity = Vector3.zero
+    hum.AutoRotate = false
+    hrp.CFrame = cf
+    faceDirection(cf.LookVector)
+    task.delay(0.2, function() if hum and hum.Parent then hum.AutoRotate = true end end)
+    return true, nil
+end
+
+-- Одна кнопка Sell: ищем все SellSpot + SellOutpost, берём ближайшую к игроку
+local function teleportToNearestSell()
+    local char = player.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false, "нет персонажа" end
+    local myPos = hrp.Position
+
+    local targets = collectSellTargets()
+    if #targets == 0 then return false, "SellSpot/SellOutpost не найдены" end
+
+    local best, bestDist, bestKind = nil, math.huge, nil
+    for _, t in ipairs(targets) do
+        if t.part and t.part.Parent then
+            local d = (t.part.Position - myPos).Magnitude
+            if d < bestDist then best, bestDist, bestKind = t.part, d, t.kind end
+        end
+    end
+    if not best then return false, "нет валидной точки" end
+
+    local ok, err = teleportToPart(best)
+    if ok then
+        return true, string.format("%s (%.0f studs)", bestKind, bestDist)
+    end
+    return false, err
 end
 
 -- === UI ===
@@ -125,7 +193,7 @@ screenGui.Parent = playerGui
 
 local main = Instance.new("Frame")
 main.Name = "Main"
-main.Size = UDim2.new(0, 340, 0, 540)
+main.Size = UDim2.new(0, 340, 0, 660) -- чуть выше под новую кнопку
 main.Position = UDim2.new(0, 20, 0, 20)
 main.BackgroundColor3 = Color3.fromRGB(20, 22, 30)
 main.BackgroundTransparency = 0.05
@@ -327,7 +395,6 @@ local function rebuildDropdown()
             local item = Instance.new("TextButton")
             item.Size = UDim2.new(1, -4, 0, 26)
             item.BackgroundColor3 = Color3.fromRGB(35, 40, 55)
-            -- Показываем ТОЛЬКО количество живых
             item.Text = "  " .. name .. "  [" .. alive .. "]"
             item.Font = Enum.Font.Gotham
             item.TextSize = 12
@@ -336,7 +403,6 @@ local function rebuildDropdown()
             item.BorderSizePixel = 0
             item.Parent = dlScroll
             Instance.new("UICorner", item).CornerRadius = UDim.new(0, 6)
-            
             item.MouseButton1Click:Connect(function()
                 selectedClass = name
                 selectedIndex = 0
@@ -441,7 +507,7 @@ UserInputService.InputEnded:Connect(function(input)
 end)
 updateSliderFromValue(currentDelay)
 
--- === Кнопки ===
+-- === Кнопки деревьев ===
 makeLabel("Действия:", Color3.fromRGB(120, 180, 255))
 
 local btnFrame = Instance.new("Frame")
@@ -473,18 +539,39 @@ local btnNext = makeButton("Вперёд ▶", Color3.fromRGB(60, 80, 140))
 local btnTP = makeButton("Телепорт", Color3.fromRGB(70, 130, 255))
 local btnLoop = makeButton("▶ Цикл", Color3.fromRGB(60, 160, 90))
 
+-- === ОДНА КНОПКА SELL ===
+makeLabel("Быстрый переход:", Color3.fromRGB(120, 180, 255))
+
+local sellBtn = Instance.new("TextButton")
+sellBtn.Size = UDim2.new(1, -8, 0, 40)
+sellBtn.BackgroundColor3 = Color3.fromRGB(230, 150, 40)
+sellBtn.Text = "💰 Ближайший Sell (Spot / Outpost)"
+sellBtn.Font = Enum.Font.GothamBold
+sellBtn.TextSize = 14
+sellBtn.TextColor3 = Color3.new(1, 1, 1)
+sellBtn.BorderSizePixel = 0
+sellBtn.Parent = scroll
+Instance.new("UICorner", sellBtn).CornerRadius = UDim.new(0, 8)
+
+sellBtn.MouseButton1Click:Connect(function()
+    local ok, info = teleportToNearestSell()
+    if ok then
+        statusLabel.Text = "💰 " .. (info or "Телепорт к Sell выполнен")
+    else
+        statusLabel.Text = "Ошибка Sell: " .. (info or "?")
+    end
+end)
+
 -- === Логика телепорта с проверкой Top ===
 local function teleportToModel(model)
     if not model or not model.Parent then return false, "нет модели" end
     if not isAlive(model) then return false, "срублено (нет Top)" end
     local trunk = hasTrunk(model)
     if not trunk then return false, "нет TrunkBase" end
-    
     local char = player.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if not hrp or not hum then return false, "нет персонажа" end
-
     local cf = getTeleportCFrame(trunk)
     hrp.AssemblyLinearVelocity = Vector3.zero
     hrp.AssemblyAngularVelocity = Vector3.zero
@@ -495,7 +582,6 @@ local function teleportToModel(model)
     return true, nil
 end
 
--- Поиск следующего живого дерева
 local function findNextAlive(direction)
     local list = selectedClass and treeClasses[selectedClass]
     if not list or #list == 0 then return nil end
@@ -516,10 +602,8 @@ end
 local function doTeleportNext(direction, isLoop)
     local list = selectedClass and treeClasses[selectedClass]
     if not list or #list == 0 then return false, "Выберите класс!" end
-    
     local targetModel, newIdx = findNextAlive(direction)
     if not targetModel then return false, "Все деревья срублены!" end
-
     local ok, err = teleportToModel(targetModel)
     if ok then
         local alive = getAliveCount(selectedClass)
@@ -571,11 +655,9 @@ end
 btnLoop.MouseButton1Click:Connect(function()
     if looping then stopLoop(); return end
     if not selectedClass then statusLabel.Text = "Сначала выберите класс!"; return end
-    
     looping = true
     btnLoop.Text = "■ Стоп"
     btnLoop.BackgroundColor3 = Color3.fromRGB(200, 70, 70)
-    
     task.spawn(function()
         while looping do
             local ok, err = doTeleportNext(1, true)
@@ -585,9 +667,7 @@ btnLoop.MouseButton1Click:Connect(function()
                 break
             end
             local t0 = tick()
-            while looping and (tick() - t0) < currentDelay do
-                task.wait(0.05)
-            end
+            while looping and (tick() - t0) < currentDelay do task.wait(0.05) end
         end
     end)
 end)
@@ -595,7 +675,7 @@ end)
 -- === Авто-обновление (слежка за живыми) ===
 task.spawn(function()
     while true do
-        task.wait(1) -- Проверяем каждую секунду
+        task.wait(1)
         if not selectedClass then
             rebuildDropdown()
         else
@@ -619,4 +699,4 @@ UserInputService.InputBegan:Connect(function(input, gp)
 end)
 
 statusLabel.Text = string.format("Найдено классов: %d", #classNames)
-print("[TreeTP] Скрипт загружен (только живые деревья)")
+print("[TreeTP] Скрипт загружен (только живые деревья + Sell кнопка)")
